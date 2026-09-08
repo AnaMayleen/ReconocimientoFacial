@@ -7,15 +7,15 @@ import runpy
 import imutils
 
 # --- Configuración ---
-personName = 'Gaby'
-dataPath = 'C:/Users/Estudiantes/OmesTutorials2020/6 RECONOCIMIENTO FACIAL/Data'  # Cambia a tu ruta
+personName = 'Raul'
+dataPath = 'Data'  # Cambia a tu ruta
 personPath = dataPath + '/' + personName
 REPO_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'a9-v720', 'src')
 
 if not os.path.exists(personPath):
     print('Carpeta creada: ', personPath)
     os.makedirs(personPath)
-
+    
 sys.path.insert(0, REPO_SRC)
 
 # --- Puente entre el script de la cámara y nuestro pipeline ---
@@ -24,6 +24,7 @@ _original_imshow = cv2.imshow  # guardamos la función real para usarla nosotros
 
 def _capture_imshow(winname, frame):
     # Se ejecuta cada vez que a9_naxclow.py muestra un frame en vivo
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # prueba esto
     if frame_queue.full():
         try:
             frame_queue.get_nowait()
@@ -53,6 +54,7 @@ while True:
 
     frame = imutils.resize(frame, width=640)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
     auxFrame = frame.copy()
 
     faces = faceClassif.detectMultiScale(gray, 1.3, 5)
