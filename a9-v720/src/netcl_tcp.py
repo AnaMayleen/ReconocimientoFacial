@@ -15,7 +15,7 @@ class netcl_tcp(netcl):
 
     def open(self) -> None:
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._socket.settimeout(30)
+        self._socket.settimeout(5)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self._socket.connect((self._host, self._port))
         self.info('Connected')
