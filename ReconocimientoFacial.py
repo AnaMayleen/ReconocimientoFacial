@@ -6,18 +6,15 @@ import queue
 import time
 import numpy as np
 import serial
+import logging
 
 
-# ==========================================================
-# OPTIMIZACIÓN DE OPENCV
-# ==========================================================
+# Optimización de OpenCV
 
 cv2.setUseOptimized(True)
 
 
-# ==========================================================
-# RUTAS
-# ==========================================================
+# Rutas
 
 BASE_DIR = os.path.dirname(
     os.path.abspath(__file__)
@@ -37,57 +34,58 @@ REPO_SRC = os.path.join(
 sys.path.insert(0, REPO_SRC)
 
 
-# ==========================================================
-# LIBRERÍAS DE LA CÁMARA
-# ==========================================================
+# Ocultar mensajes de depuración de la cámara A9
+
+from log import log
+
+# Oculta los mensajes internos de depuración de la cámara.
+log.set_log_lvl(logging.WARNING)
+
+
+# Librerías de la cámara
 
 from netcl_tcp import netcl_tcp
 from v720_ap import v720_ap
 import cmd_udp
 
 
-# ==========================================================
-# CONFIGURACIÓN DE LA CÁMARA
-# ==========================================================
+# Configuración de la cámara
 
 CAMERA_IP = '192.168.169.1'
 CAMERA_PORT = 6123
 
 VIDEO_TIMEOUT = 10
-
 RECONNECT_DELAY = 2
 
 
-# ==========================================================
-# CONFIGURACIÓN DE VIDEO
-# ==========================================================
+# Configuración de video
 
 ANCHO_PROCESAMIENTO = 480
 
-# Umbral LBPH:
-# menor = más estricto
-# mayor = más permisivo
+# Umbral LBPH: menor valor = reconocimiento más estricto.
 UMBRAL_RECONOCIMIENTO = 70
 
-# ==========================================================
-# CONFIGURACIÓN DEL ESP32 / RELÉ
-# ==========================================================
+
+# Configuración del ESP32 y relé
 
 ESP32_PORT = "COM8"
 ESP32_BAUD = 115200
 
-# Evita activar el relé muchas veces seguidas mientras
-# el mismo rostro permanece frente a la cámara.
+# Evita activar el relé repetidamente con el mismo rostro.
 TIEMPO_ENTRE_ACCESOS = 5
 
+
+# Conexión con el ESP32
+
 try:
+
     esp32 = serial.Serial(
         ESP32_PORT,
         ESP32_BAUD,
         timeout=1
     )
 
-    # Al abrir el puerto serial, el ESP32 puede reiniciarse.
+    # Espera el reinicio del ESP32 al abrir el puerto.
     time.sleep(2)
 
     print(
@@ -95,6 +93,7 @@ try:
     )
 
 except serial.SerialException as error:
+
     print(
         f"ERROR: No se pudo abrir {ESP32_PORT}: {error}"
     )
@@ -105,13 +104,11 @@ except serial.SerialException as error:
 
     raise
 
+
 ultimo_acceso = 0
 
 
-
-# ==========================================================
-# PERSONAS REGISTRADAS
-# ==========================================================
+# Personas registradas
 
 imagePaths = sorted([
     nombre
@@ -127,9 +124,7 @@ print(
 )
 
 
-# ==========================================================
-# COLA DE FRAMES
-# ==========================================================
+# Cola de frames
 
 frame_queue = queue.Queue(
     maxsize=1
@@ -138,31 +133,31 @@ frame_queue = queue.Queue(
 stop_event = threading.Event()
 
 
-# ==========================================================
-# GUARDAR SOLO EL FRAME MÁS NUEVO
-# ==========================================================
+# Guardar solo el frame más reciente
 
 def guardar_frame(frame):
 
     if frame is None:
         return
 
+    # Descarta el frame anterior.
     try:
         frame_queue.get_nowait()
+
     except queue.Empty:
         pass
 
+    # Guarda el frame más reciente.
     try:
         frame_queue.put_nowait(
             frame
         )
+
     except queue.Full:
         pass
 
 
-# ==========================================================
-# HILO DE LA CÁMARA
-# ==========================================================
+# Hilo de la cámara
 
 def camera_worker():
 
@@ -189,9 +184,7 @@ def camera_worker():
 
         try:
 
-            # ==================================================
-            # CONECTAR SOCKET
-            # ==================================================
+            # Conectar socket
 
             with netcl_tcp(
                 CAMERA_IP,
@@ -203,9 +196,7 @@ def camera_worker():
                 )
 
 
-                # ==================================================
-                # INICIALIZAR CÁMARA
-                # ==================================================
+                # Inicializar cámara
 
                 cam = v720_ap(
                     sock
@@ -218,24 +209,25 @@ def camera_worker():
                 )
 
 
-                # ==================================================
-                # CONFIGURACIÓN OPCIONAL
-                # ==================================================
+                # Ajustes de la cámara
 
                 try:
+
                     cam.ir_led(False)
+
                 except Exception:
                     pass
+
 
                 try:
+
                     cam.flip(False)
+
                 except Exception:
                     pass
 
 
-                # ==================================================
-                # BUFFER JPEG
-                # ==================================================
+                # Buffer JPEG
 
                 jpeg_buffer = bytearray()
 
@@ -245,9 +237,7 @@ def camera_worker():
                 }
 
 
-                # ==================================================
-                # WATCHDOG
-                # ==================================================
+                # Control de pérdida de video
 
                 def watchdog():
 
@@ -275,7 +265,9 @@ def camera_worker():
                             )
 
                             try:
+
                                 sock.close()
+
                             except Exception:
                                 pass
 
@@ -290,13 +282,11 @@ def camera_worker():
                 watchdog_thread.start()
 
 
-                # ==================================================
-                # RECIBIR DATOS
-                # ==================================================
+                # Recibir datos de la cámara
 
                 def on_rcv(cmd, data):
 
-                    # Solo JPEG
+                    # Procesa solo paquetes JPEG.
                     if (
                         cmd
                         != cmd_udp.P2P_UDP_CMD_JPEG
@@ -307,15 +297,13 @@ def camera_worker():
                         return
 
 
-                    # Añadir datos al buffer
+                    # Añade datos al buffer.
                     jpeg_buffer.extend(
                         data
                     )
 
 
-                    # ==================================================
-                    # BUSCAR IMÁGENES JPEG COMPLETAS
-                    # ==================================================
+                    # Buscar imágenes JPEG completas
 
                     while True:
 
@@ -323,6 +311,7 @@ def camera_worker():
                             b'\xff\xd8'
                         )
 
+                        # Si no hay inicio JPEG, espera más datos.
                         if inicio == -1:
 
                             if (
@@ -341,6 +330,7 @@ def camera_worker():
                         )
 
 
+                        # Espera hasta recibir el JPEG completo.
                         if fin == -1:
 
                             if inicio > 0:
@@ -360,9 +350,7 @@ def camera_worker():
                             return
 
 
-                        # ==================================================
-                        # EXTRAER JPEG
-                        # ==================================================
+                        # Extraer JPEG
 
                         jpeg_bytes = bytes(
                             jpeg_buffer[
@@ -376,9 +364,7 @@ def camera_worker():
                         ]
 
 
-                        # ==================================================
-                        # DECODIFICAR CON OPENCV
-                        # ==================================================
+                        # Decodificar JPEG con OpenCV
 
                         jpeg_array = np.frombuffer(
                             jpeg_bytes,
@@ -406,9 +392,7 @@ def camera_worker():
                         )
 
 
-                # ==================================================
-                # INICIAR VIDEO
-                # ==================================================
+                # Iniciar transmisión de video
 
                 print(
                     "Iniciando transmisión de vídeo..."
@@ -448,9 +432,7 @@ def camera_worker():
             connection_stop.set()
 
 
-        # ==================================================
-        # RECONECTAR
-        # ==================================================
+        # Reconectar cámara
 
         if not stop_event.is_set():
 
@@ -464,9 +446,7 @@ def camera_worker():
             )
 
 
-# ==========================================================
-# INICIAR HILO DE CÁMARA
-# ==========================================================
+# Iniciar hilo de la cámara
 
 cam_thread = threading.Thread(
     target=camera_worker,
@@ -476,9 +456,7 @@ cam_thread = threading.Thread(
 cam_thread.start()
 
 
-# ==========================================================
-# MODELO LBPH
-# ==========================================================
+# Modelo LBPH
 
 face_recognizer = (
     cv2.face.LBPHFaceRecognizer_create()
@@ -496,9 +474,7 @@ face_recognizer.read(
 )
 
 
-# ==========================================================
-# CLASIFICADOR DE ROSTROS
-# ==========================================================
+# Clasificador de rostros
 
 faceClassif = cv2.CascadeClassifier(
     cv2.data.haarcascades
@@ -506,9 +482,7 @@ faceClassif = cv2.CascadeClassifier(
 )
 
 
-# ==========================================================
-# VENTANA
-# ==========================================================
+# Ventana de video
 
 cv2.namedWindow(
     'Reconocimiento Facial',
@@ -516,9 +490,7 @@ cv2.namedWindow(
 )
 
 
-# ==========================================================
-# VARIABLES
-# ==========================================================
+# Variables de control
 
 ultimo_aviso = 0
 
@@ -531,17 +503,13 @@ tiempo_fps = (
 )
 
 
-# ==========================================================
-# BUCLE PRINCIPAL
-# ==========================================================
+# Bucle principal
 
 try:
 
     while True:
 
-        # ==================================================
-        # OBTENER FRAME
-        # ==================================================
+        # Obtener frame
 
         try:
 
@@ -557,6 +525,7 @@ try:
             )
 
 
+            # Salir con ESC.
             if tecla == 27:
                 break
 
@@ -566,6 +535,7 @@ try:
             )
 
 
+            # Muestra el aviso cada 5 segundos.
             if (
                 ahora
                 - ultimo_aviso
@@ -581,9 +551,7 @@ try:
             continue
 
 
-        # ==================================================
-        # REDIMENSIONAR
-        # ==================================================
+        # Redimensionar frame
 
         alto_original, ancho_original = (
             frame.shape[:2]
@@ -612,9 +580,7 @@ try:
         )
 
 
-        # ==================================================
-        # ESCALA DE GRISES
-        # ==========================================================
+        # Convertir a escala de grises
 
         gray = cv2.cvtColor(
             frame,
@@ -622,9 +588,7 @@ try:
         )
 
 
-        # ==========================================================
-        # DETECTAR ROSTROS EN CADA FRAME
-        # ==========================================================
+        # Detectar rostros
 
         faces = (
             faceClassif.detectMultiScale(
@@ -636,9 +600,7 @@ try:
         )
 
 
-        # ==========================================================
-        # RECONOCER CADA ROSTRO EN ESTE MISMO FRAME
-        # ==========================================================
+        # Reconocer rostros detectados
 
         for (
             x,
@@ -665,9 +627,7 @@ try:
             )
 
 
-            # ==================================================
-            # RECONOCIMIENTO LBPH
-            # ==================================================
+            # Reconocimiento LBPH
 
             result = (
                 face_recognizer.predict(
@@ -686,9 +646,7 @@ try:
             )
 
 
-            # ==================================================
-            # CONOCIDO
-            # ==================================================
+            # Persona reconocida
 
             if (
                 confianza
@@ -707,11 +665,13 @@ try:
                         ]
                     )
 
-                    # ==============================================
-                    # ACTIVAR RELÉ MEDIANTE EL ESP32
-                    # ==============================================
 
-                    ahora_acceso = time.monotonic()
+                    # Activar relé mediante el ESP32
+
+                    ahora_acceso = (
+                        time.monotonic()
+                    )
+
 
                     if (
                         ahora_acceso
@@ -723,11 +683,16 @@ try:
                             f"Acceso autorizado: {nombre}"
                         )
 
+
                         esp32.write(
                             b"ABRIR\n"
                         )
 
-                        ultimo_acceso = ahora_acceso
+
+                        ultimo_acceso = (
+                            ahora_acceso
+                        )
+
 
                 else:
 
@@ -736,6 +701,7 @@ try:
                     )
 
 
+                # Verde: persona reconocida.
                 color = (
                     0,
                     255,
@@ -743,9 +709,7 @@ try:
                 )
 
 
-            # ==================================================
-            # DESCONOCIDO
-            # ==================================================
+            # Persona desconocida
 
             else:
 
@@ -753,6 +717,7 @@ try:
                     "Desconocido"
                 )
 
+                # Rojo: persona desconocida.
                 color = (
                     0,
                     0,
@@ -760,9 +725,7 @@ try:
                 )
 
 
-            # ==================================================
-            # RECTÁNGULO
-            # ==================================================
+            # Dibujar recuadro del rostro
 
             cv2.rectangle(
                 frame,
@@ -779,9 +742,7 @@ try:
             )
 
 
-            # ==================================================
-            # NOMBRE
-            # ==================================================
+            # Mostrar nombre
 
             cv2.putText(
                 frame,
@@ -801,9 +762,7 @@ try:
             )
 
 
-            # ==================================================
-            # CONFIANZA
-            # ==================================================
+            # Mostrar nivel de confianza
 
             cv2.putText(
                 frame,
@@ -827,9 +786,7 @@ try:
             )
 
 
-        # ==================================================
-        # FPS
-        # ==================================================
+        # Calcular FPS
 
         contador_fps += 1
 
@@ -851,37 +808,15 @@ try:
                 / diferencia
             )
 
+
             contador_fps = 0
 
             tiempo_fps = ahora
 
 
-        # ==================================================
-        # MOSTRAR FPS
-        # ==================================================
-
-        cv2.putText(
-            frame,
-            f'FPS: {fps:.1f}',
-            (
-                10,
-                25
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (
-                0,
-                255,
-                0
-            ),
-            2,
-            cv2.LINE_AA
-        )
 
 
-        # ==================================================
-        # MOSTRAR VIDEO
-        # ==================================================
+        # Mostrar video
 
         cv2.imshow(
             'Reconocimiento Facial',
@@ -889,9 +824,7 @@ try:
         )
 
 
-        # ==================================================
-        # TECLA ESC
-        # ==================================================
+        # Salir con ESC
 
         tecla = (
             cv2.waitKey(1)
@@ -903,6 +836,8 @@ try:
             break
 
 
+# Detener con Ctrl + C
+
 except KeyboardInterrupt:
 
     print(
@@ -910,14 +845,22 @@ except KeyboardInterrupt:
     )
 
 
+# Cerrar recursos
+
 finally:
 
     stop_event.set()
 
     cv2.destroyAllWindows()
 
-    if 'esp32' in globals() and esp32.is_open:
+
+    if (
+        'esp32' in globals()
+        and esp32.is_open
+    ):
+
         esp32.close()
+
 
     print(
         "Reconocimiento facial finalizado."

@@ -7,18 +7,14 @@ import time
 import numpy as np
 
 
-# ==========================================================
-# OPTIMIZACIÓN DE OPENCV
-# ==========================================================
+# Optimización de OpenCV
 
 cv2.setUseOptimized(True)
 
 
-# ==========================================================
-# CONFIGURACIÓN DE PERSONA
-# ==========================================================
-
-personName = 'Ashley'
+# Persona y carpeta de captura
+# Nombre de la persona a registrar
+personName = input("Ingrese el nombre de la persona: ").strip()
 
 dataPath = 'Data'
 
@@ -26,6 +22,12 @@ personPath = os.path.join(
     dataPath,
     personName
 )
+
+if not os.path.exists(personPath):
+    os.makedirs(personPath)
+    print("Carpeta creada:", personPath)
+else:
+    print("La persona ya tiene una carpeta:", personPath)
 
 if not os.path.exists(personPath):
 
@@ -39,9 +41,7 @@ if not os.path.exists(personPath):
     )
 
 
-# ==========================================================
-# RUTAS
-# ==========================================================
+# Rutas
 
 BASE_DIR = os.path.dirname(
     os.path.abspath(__file__)
@@ -59,46 +59,36 @@ sys.path.insert(
 )
 
 
-# ==========================================================
-# LIBRERÍAS DE LA CÁMARA
-# ==========================================================
+# Librerías de la cámara
 
 from netcl_tcp import netcl_tcp
 from v720_ap import v720_ap
 import cmd_udp
 
 
-# ==========================================================
-# CONFIGURACIÓN DE LA CÁMARA
-# ==========================================================
+# Configuración de la cámara
 
 CAMERA_IP = '192.168.169.1'
 
 CAMERA_PORT = 6123
 
-# Si pasan 10 segundos sin recibir imágenes,
-# se fuerza una reconexión.
+# Reconecta si no llegan imágenes durante 10 segundos.
 VIDEO_TIMEOUT = 10
 
-# Tiempo antes de intentar conectarse nuevamente.
+# Espera antes de reconectar.
 RECONNECT_DELAY = 2
 
 
-# ==========================================================
-# CONFIGURACIÓN DE CAPTURA
-# ==========================================================
+# Configuración de captura
 
 ANCHO_PROCESAMIENTO = 640
 
 MAX_ROSTROS = 300
 
 
-# ==========================================================
-# COLA DE FRAMES
-# ==========================================================
+# Cola de frames
 
-# Solo conservamos el frame más nuevo.
-# Esto evita acumulación y retraso en el vídeo.
+# Evita retraso conservando solo el frame más reciente.
 
 frame_queue = queue.Queue(
     maxsize=1
@@ -107,9 +97,7 @@ frame_queue = queue.Queue(
 stop_event = threading.Event()
 
 
-# ==========================================================
-# GUARDAR SOLO EL FRAME MÁS NUEVO
-# ==========================================================
+# Guardar el frame más reciente
 
 def guardar_frame(frame):
 
@@ -135,9 +123,7 @@ def guardar_frame(frame):
         pass
 
 
-# ==========================================================
-# HILO DE CONEXIÓN CON LA CÁMARA
-# ==========================================================
+# Conexión con la cámara
 
 def camera_worker():
 
@@ -164,9 +150,7 @@ def camera_worker():
 
         try:
 
-            # ==================================================
-            # CONECTAR SOCKET
-            # ==================================================
+            # Conectar socket
 
             with netcl_tcp(
                 CAMERA_IP,
@@ -177,9 +161,7 @@ def camera_worker():
                     "Socket conectado."
                 )
 
-                # ==================================================
-                # INICIALIZAR CÁMARA
-                # ==================================================
+                # Inicializar cámara
 
                 cam = v720_ap(
                     sock
@@ -191,9 +173,7 @@ def camera_worker():
                     "Cámara A9 detectada."
                 )
 
-                # ==================================================
-                # CONFIGURACIÓN OPCIONAL
-                # ==================================================
+                # Ajustes de cámara
 
                 try:
 
@@ -216,9 +196,7 @@ def camera_worker():
                     pass
 
 
-                # ==================================================
-                # BUFFER JPEG
-                # ==================================================
+                # Buffer JPEG
 
                 jpeg_buffer = bytearray()
 
@@ -227,9 +205,7 @@ def camera_worker():
                 }
 
 
-                # ==================================================
-                # WATCHDOG
-                # ==================================================
+                # Control de pérdida de video
 
                 def watchdog():
 
@@ -275,13 +251,11 @@ def camera_worker():
                 watchdog_thread.start()
 
 
-                # ==================================================
-                # RECIBIR DATOS DE LA CÁMARA
-                # ==================================================
+                # Recibir datos
 
                 def on_rcv(cmd, data):
 
-                    # Solo nos interesan paquetes JPEG.
+                    # Procesar solo paquetes JPEG.
 
                     if (
                         cmd
@@ -295,16 +269,14 @@ def camera_worker():
                         return
 
 
-                    # Añadir datos recibidos al buffer.
+                    # Añadir datos al buffer.
 
                     jpeg_buffer.extend(
                         data
                     )
 
 
-                    # ==================================================
-                    # BUSCAR JPEG COMPLETOS
-                    # ==================================================
+                    # Buscar JPEG completos
 
                     while True:
 
@@ -349,9 +321,7 @@ def camera_worker():
                             return
 
 
-                        # ==================================================
-                        # EXTRAER JPEG
-                        # ==================================================
+                        # Extraer JPEG
 
                         jpeg_bytes = bytes(
                             jpeg_buffer[
@@ -364,9 +334,7 @@ def camera_worker():
                         ]
 
 
-                        # ==================================================
-                        # DECODIFICAR CON OPENCV
-                        # ==================================================
+                        # Decodificar JPEG
 
                         jpeg_array = np.frombuffer(
                             jpeg_bytes,
@@ -383,23 +351,21 @@ def camera_worker():
                             continue
 
 
-                        # Actualizar watchdog.
+                        # Actualizar control de video.
 
                         estado['ultimo_frame'] = (
                             time.monotonic()
                         )
 
 
-                        # Guardar solamente el frame más nuevo.
+                        # Guardar el frame más reciente.
 
                         guardar_frame(
                             frame
                         )
 
 
-                # ==================================================
-                # INICIAR TRANSMISIÓN
-                # ==================================================
+                # Iniciar transmisión
 
                 print(
                     "Iniciando transmisión de vídeo..."
@@ -438,9 +404,7 @@ def camera_worker():
             connection_stop.set()
 
 
-        # ==================================================
-        # RECONECTAR
-        # ==================================================
+        # Reconectar cámara
 
         if not stop_event.is_set():
 
@@ -454,9 +418,7 @@ def camera_worker():
             )
 
 
-# ==========================================================
-# INICIAR HILO DE CÁMARA
-# ==========================================================
+# Iniciar cámara
 
 cam_thread = threading.Thread(
     target=camera_worker,
@@ -466,9 +428,7 @@ cam_thread = threading.Thread(
 cam_thread.start()
 
 
-# ==========================================================
-# CLASIFICADOR DE ROSTROS
-# ==========================================================
+# Detector de rostros
 
 faceClassif = cv2.CascadeClassifier(
     cv2.data.haarcascades
@@ -476,9 +436,7 @@ faceClassif = cv2.CascadeClassifier(
 )
 
 
-# ==========================================================
-# VENTANA
-# ==========================================================
+# Ventana
 
 cv2.namedWindow(
     'Captura de Rostros',
@@ -486,26 +444,20 @@ cv2.namedWindow(
 )
 
 
-# ==========================================================
-# CONTADOR
-# ==========================================================
+# Contador
 
 count = 0
 
 ultimo_aviso = 0
 
 
-# ==========================================================
-# BUCLE PRINCIPAL
-# ==========================================================
+# Bucle principal
 
 try:
 
     while True:
 
-        # ==================================================
-        # OBTENER FRAME
-        # ==================================================
+        # Obtener frame
 
         try:
 
@@ -542,9 +494,7 @@ try:
             continue
 
 
-        # ==================================================
-        # REDIMENSIONAR
-        # ==========================================================
+        # Redimensionar
 
         alto_original, ancho_original = (
             frame.shape[:2]
@@ -570,14 +520,12 @@ try:
         )
 
 
-        # Copia limpia para guardar los rostros.
+        # Copia para guardar rostros.
 
         auxFrame = frame.copy()
 
 
-        # ==================================================
-        # ESCALA DE GRISES
-        # ==========================================================
+        # Escala de grises
 
         gray = cv2.cvtColor(
             frame,
@@ -585,9 +533,7 @@ try:
         )
 
 
-        # ==================================================
-        # DETECTAR ROSTROS
-        # ==========================================================
+        # Detectar rostros
 
         faces = faceClassif.detectMultiScale(
             gray,
@@ -597,9 +543,7 @@ try:
         )
 
 
-        # ==================================================
-        # GUARDAR ROSTROS
-        # ==========================================================
+        # Guardar rostros
 
         for (
             x,
@@ -608,7 +552,7 @@ try:
             h
         ) in faces:
 
-            # Dibujar rectángulo.
+            # Marcar rostro.
 
             cv2.rectangle(
                 frame,
@@ -652,9 +596,7 @@ try:
             )
 
 
-            # ==================================================
-            # GUARDAR IMAGEN
-            # ==================================================
+            # Guardar imagen
 
             ruta_rostro = os.path.join(
                 personPath,
@@ -702,9 +644,7 @@ try:
                 break
 
 
-        # ==================================================
-        # MOSTRAR CONTADOR AUNQUE NO HAYA ROSTRO
-        # ==========================================================
+        # Mostrar contador
 
         cv2.putText(
             frame,
@@ -725,9 +665,7 @@ try:
         )
 
 
-        # ==================================================
-        # MOSTRAR VÍDEO
-        # ==========================================================
+        # Mostrar video
 
         cv2.imshow(
             'Captura de Rostros',
@@ -735,9 +673,7 @@ try:
         )
 
 
-        # ==================================================
-        # SALIR
-        # ==========================================================
+        # Salir
 
         tecla = (
             cv2.waitKey(1)
@@ -745,13 +681,13 @@ try:
         )
 
 
-        # ESC
+        # ESC para salir.
         if tecla == 27:
 
             break
 
 
-        # Terminamos automáticamente al llegar a 300.
+        # Finalizar al completar las capturas.
 
         if count >= MAX_ROSTROS:
 
