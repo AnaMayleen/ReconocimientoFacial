@@ -68,11 +68,10 @@ UMBRAL_RECONOCIMIENTO = 70
 
 # Configuración del ESP32 y relé
 
-ESP32_PORT = "COM8"
+ESP32_PORT = "COM11"
 ESP32_BAUD = 115200
 
-# Evita activar el relé repetidamente con el mismo rostro.
-TIEMPO_ENTRE_ACCESOS = 5
+
 
 
 # Conexión con el ESP32
@@ -104,8 +103,7 @@ except serial.SerialException as error:
 
     raise
 
-
-ultimo_acceso = 0
+rostro_ya_autorizado = False
 
 
 # Personas registradas
@@ -509,8 +507,23 @@ try:
 
     while True:
 
-        # Obtener frame
+        # Revisar mensajes del ESP32
+        if esp32.in_waiting > 0:
 
+            mensaje = esp32.readline().decode(
+                "utf-8",
+                errors="ignore"
+            ).strip()
+
+            if mensaje == "LISTO":
+
+                rostro_ya_autorizado = False
+
+                print(
+                    "Sistema listo para otro rostro"
+                )
+
+        # Obtener frame
         try:
 
             frame = frame_queue.get(
@@ -659,55 +672,35 @@ try:
                     < len(imagePaths)
                 ):
 
-                    nombre = (
-                        imagePaths[
-                            id_persona
-                        ]
-                    )
+                    nombre = imagePaths[id_persona]
 
-
-                    # Activar relé mediante el ESP32
-
-                    ahora_acceso = (
-                        time.monotonic()
-                    )
-
-
-                    if (
-                        ahora_acceso
-                        - ultimo_acceso
-                        >= TIEMPO_ENTRE_ACCESOS
-                    ):
+                    # Enviar autorización una sola vez
+                    if not rostro_ya_autorizado:
 
                         print(
-                            f"Acceso autorizado: {nombre}"
+                            f"Rostro autorizado: {nombre}"
                         )
-
 
                         esp32.write(
-                            b"ABRIR\n"
+                            b"ROSTRO_OK\n"
                         )
 
-
-                        ultimo_acceso = (
-                            ahora_acceso
+                        print(
+                            "Ingrese 7890# en el keypad"
                         )
 
+                        rostro_ya_autorizado = True
 
                 else:
 
-                    nombre = (
-                        "ID desconocido"
-                    )
+                    nombre = "ID desconocido"
 
-
-                # Verde: persona reconocida.
                 color = (
                     0,
                     255,
                     0
                 )
-
+                
 
             # Persona desconocida
 

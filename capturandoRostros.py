@@ -8,12 +8,10 @@ import numpy as np
 
 
 # Optimización de OpenCV
-
 cv2.setUseOptimized(True)
 
 
 # Persona y carpeta de captura
-# Nombre de la persona a registrar
 personName = input("Ingrese el nombre de la persona: ").strip()
 
 dataPath = 'Data'
@@ -29,20 +27,8 @@ if not os.path.exists(personPath):
 else:
     print("La persona ya tiene una carpeta:", personPath)
 
-if not os.path.exists(personPath):
-
-    print(
-        'Carpeta creada:',
-        personPath
-    )
-
-    os.makedirs(
-        personPath
-    )
-
 
 # Rutas
-
 BASE_DIR = os.path.dirname(
     os.path.abspath(__file__)
 )
@@ -60,14 +46,12 @@ sys.path.insert(
 
 
 # Librerías de la cámara
-
 from netcl_tcp import netcl_tcp
 from v720_ap import v720_ap
 import cmd_udp
 
 
 # Configuración de la cámara
-
 CAMERA_IP = '192.168.169.1'
 
 CAMERA_PORT = 6123
@@ -80,16 +64,13 @@ RECONNECT_DELAY = 2
 
 
 # Configuración de captura
-
 ANCHO_PROCESAMIENTO = 640
 
-MAX_ROSTROS = 300
+# Cantidad de imágenes NUEVAS cada vez que ejecutes el programa.
+CAPTURAS_NUEVAS = 300
 
 
 # Cola de frames
-
-# Evita retraso conservando solo el frame más reciente.
-
 frame_queue = queue.Queue(
     maxsize=1
 )
@@ -98,33 +79,27 @@ stop_event = threading.Event()
 
 
 # Guardar el frame más reciente
-
 def guardar_frame(frame):
 
     if frame is None:
         return
 
     try:
-
         frame_queue.get_nowait()
 
     except queue.Empty:
-
         pass
 
     try:
-
         frame_queue.put_nowait(
             frame
         )
 
     except queue.Full:
-
         pass
 
 
 # Conexión con la cámara
-
 def camera_worker():
 
     conexion = 0
@@ -151,7 +126,6 @@ def camera_worker():
         try:
 
             # Conectar socket
-
             with netcl_tcp(
                 CAMERA_IP,
                 CAMERA_PORT
@@ -162,7 +136,6 @@ def camera_worker():
                 )
 
                 # Inicializar cámara
-
                 cam = v720_ap(
                     sock
                 )
@@ -174,7 +147,6 @@ def camera_worker():
                 )
 
                 # Ajustes de cámara
-
                 try:
 
                     cam.ir_led(
@@ -182,7 +154,6 @@ def camera_worker():
                     )
 
                 except Exception:
-
                     pass
 
                 try:
@@ -192,12 +163,10 @@ def camera_worker():
                     )
 
                 except Exception:
-
                     pass
 
 
                 # Buffer JPEG
-
                 jpeg_buffer = bytearray()
 
                 estado = {
@@ -206,7 +175,6 @@ def camera_worker():
 
 
                 # Control de pérdida de video
-
                 def watchdog():
 
                     while not connection_stop.wait(1):
@@ -233,11 +201,9 @@ def camera_worker():
                             )
 
                             try:
-
                                 sock.close()
 
                             except Exception:
-
                                 pass
 
                             return
@@ -252,32 +218,26 @@ def camera_worker():
 
 
                 # Recibir datos
-
                 def on_rcv(cmd, data):
 
                     # Procesar solo paquetes JPEG.
-
                     if (
                         cmd
                         != cmd_udp.P2P_UDP_CMD_JPEG
                     ):
-
                         return
 
                     if not data:
-
                         return
 
 
                     # Añadir datos al buffer.
-
                     jpeg_buffer.extend(
                         data
                     )
 
 
                     # Buscar JPEG completos
-
                     while True:
 
                         inicio = jpeg_buffer.find(
@@ -290,7 +250,6 @@ def camera_worker():
                                 len(jpeg_buffer)
                                 > 2_000_000
                             ):
-
                                 jpeg_buffer.clear()
 
                             return
@@ -310,19 +269,16 @@ def camera_worker():
                                     :inicio
                                 ]
 
-
                             if (
                                 len(jpeg_buffer)
                                 > 2_000_000
                             ):
-
                                 jpeg_buffer.clear()
 
                             return
 
 
                         # Extraer JPEG
-
                         jpeg_bytes = bytes(
                             jpeg_buffer[
                                 inicio:fin + 2
@@ -335,7 +291,6 @@ def camera_worker():
 
 
                         # Decodificar JPEG
-
                         jpeg_array = np.frombuffer(
                             jpeg_bytes,
                             dtype=np.uint8
@@ -347,26 +302,22 @@ def camera_worker():
                         )
 
                         if frame is None:
-
                             continue
 
 
                         # Actualizar control de video.
-
                         estado['ultimo_frame'] = (
                             time.monotonic()
                         )
 
 
                         # Guardar el frame más reciente.
-
                         guardar_frame(
                             frame
                         )
 
 
                 # Iniciar transmisión
-
                 print(
                     "Iniciando transmisión de vídeo..."
                 )
@@ -405,7 +356,6 @@ def camera_worker():
 
 
         # Reconectar cámara
-
         if not stop_event.is_set():
 
             print(
@@ -419,7 +369,6 @@ def camera_worker():
 
 
 # Iniciar cámara
-
 cam_thread = threading.Thread(
     target=camera_worker,
     daemon=True
@@ -429,7 +378,6 @@ cam_thread.start()
 
 
 # Detector de rostros
-
 faceClassif = cv2.CascadeClassifier(
     cv2.data.haarcascades
     + 'haarcascade_frontalface_default.xml'
@@ -437,28 +385,115 @@ faceClassif = cv2.CascadeClassifier(
 
 
 # Ventana
-
 cv2.namedWindow(
     'Captura de Rostros',
     cv2.WINDOW_NORMAL
 )
 
 
-# Contador
+# ======================================================
+# DETECTAR IMÁGENES QUE YA EXISTEN
+# ======================================================
 
-count = 0
+extensiones_imagen = (
+    '.jpg',
+    '.jpeg',
+    '.png'
+)
+
+imagenes_existentes = [
+    archivo
+    for archivo in os.listdir(personPath)
+    if archivo.lower().endswith(
+        extensiones_imagen
+    )
+]
+
+
+# Buscar el número más alto de rostro_#.jpg
+indices_existentes = []
+
+for archivo in imagenes_existentes:
+
+    nombre_sin_extension = (
+        os.path.splitext(archivo)[0]
+    )
+
+    if nombre_sin_extension.startswith(
+        'rostro_'
+    ):
+
+        try:
+
+            indice = int(
+                nombre_sin_extension.split(
+                    '_'
+                )[-1]
+            )
+
+            indices_existentes.append(
+                indice
+            )
+
+        except ValueError:
+            pass
+
+
+# Determinar desde qué número continuar
+if indices_existentes:
+
+    siguiente_indice = (
+        max(indices_existentes)
+        + 1
+    )
+
+else:
+
+    siguiente_indice = 0
+
+
+capturas_nuevas = 0
+
+cantidad_inicial = len(
+    imagenes_existentes
+)
+
+
+print()
+print(
+    f"Persona: {personName}"
+)
+
+print(
+    f"Imágenes existentes: "
+    f"{cantidad_inicial}"
+)
+
+print(
+    f"Próxima imagen: "
+    f"rostro_{siguiente_indice}.jpg"
+)
+
+print(
+    f"Se capturarán "
+    f"{CAPTURAS_NUEVAS} imágenes nuevas."
+)
+
+print()
+
 
 ultimo_aviso = 0
 
 
-# Bucle principal
+# ======================================================
+# BUCLE PRINCIPAL
+# ======================================================
 
 try:
 
     while True:
 
         # Obtener frame
-
         try:
 
             frame = frame_queue.get(
@@ -473,7 +508,6 @@ try:
             )
 
             if tecla == 27:
-
                 break
 
 
@@ -495,7 +529,6 @@ try:
 
 
         # Redimensionar
-
         alto_original, ancho_original = (
             frame.shape[:2]
         )
@@ -521,12 +554,10 @@ try:
 
 
         # Copia para guardar rostros.
-
         auxFrame = frame.copy()
 
 
         # Escala de grises
-
         gray = cv2.cvtColor(
             frame,
             cv2.COLOR_BGR2GRAY
@@ -534,7 +565,6 @@ try:
 
 
         # Detectar rostros
-
         faces = faceClassif.detectMultiScale(
             gray,
             scaleFactor=1.3,
@@ -544,7 +574,6 @@ try:
 
 
         # Guardar rostros
-
         for (
             x,
             y,
@@ -553,7 +582,6 @@ try:
         ) in faces:
 
             # Marcar rostro.
-
             cv2.rectangle(
                 frame,
                 (
@@ -574,7 +602,6 @@ try:
 
 
             # Extraer rostro.
-
             rostro = auxFrame[
                 y:y + h,
                 x:x + w
@@ -582,7 +609,6 @@ try:
 
 
             if rostro.size == 0:
-
                 continue
 
 
@@ -597,32 +623,54 @@ try:
 
 
             # Guardar imagen
-
             ruta_rostro = os.path.join(
                 personPath,
-                f'rostro_{count}.jpg'
+                f'rostro_{siguiente_indice}.jpg'
             )
 
-            cv2.imwrite(
+
+            guardado = cv2.imwrite(
                 ruta_rostro,
                 rostro
             )
 
 
-            count += 1
+            if not guardado:
+
+                print(
+                    "No se pudo guardar:",
+                    ruta_rostro
+                )
+
+                continue
+
+
+            siguiente_indice += 1
+
+            capturas_nuevas += 1
+
+
+            total_actual = (
+                cantidad_inicial
+                + capturas_nuevas
+            )
 
 
             print(
-                f"Rostro capturado: "
-                f"{count}/{MAX_ROSTROS}"
+                f"Rostro nuevo: "
+                f"{capturas_nuevas}/"
+                f"{CAPTURAS_NUEVAS} "
+                f"| Total: {total_actual}"
             )
 
 
             # Mostrar contador.
-
             cv2.putText(
                 frame,
-                f'Capturas: {count}/{MAX_ROSTROS}',
+                f'Nuevas: '
+                f'{capturas_nuevas}/'
+                f'{CAPTURAS_NUEVAS} '
+                f'| Total: {total_actual}',
                 (
                     10,
                     30
@@ -639,16 +687,21 @@ try:
             )
 
 
-            if count >= MAX_ROSTROS:
-
+            if (
+                capturas_nuevas
+                >= CAPTURAS_NUEVAS
+            ):
                 break
 
 
         # Mostrar contador
-
         cv2.putText(
             frame,
-            f'Capturas: {count}/{MAX_ROSTROS}',
+            f'Nuevas: '
+            f'{capturas_nuevas}/'
+            f'{CAPTURAS_NUEVAS} '
+            f'| Total: '
+            f'{cantidad_inicial + capturas_nuevas}',
             (
                 10,
                 30
@@ -666,7 +719,6 @@ try:
 
 
         # Mostrar video
-
         cv2.imshow(
             'Captura de Rostros',
             frame
@@ -674,7 +726,6 @@ try:
 
 
         # Salir
-
         tecla = (
             cv2.waitKey(1)
             & 0xFF
@@ -683,19 +734,23 @@ try:
 
         # ESC para salir.
         if tecla == 27:
-
             break
 
 
         # Finalizar al completar las capturas.
-
-        if count >= MAX_ROSTROS:
+        if (
+            capturas_nuevas
+            >= CAPTURAS_NUEVAS
+        ):
 
             print()
 
             print(
                 f"Captura completada: "
-                f"{count} rostros guardados."
+                f"{capturas_nuevas} "
+                f"rostros nuevos guardados. "
+                f"Total: "
+                f"{cantidad_inicial + capturas_nuevas}."
             )
 
             break
