@@ -3,71 +3,772 @@ import os
 import sys
 import threading
 import queue
-import runpy
-import imutils
+import time
+import numpy as np
 
-# --- Configuración ---
-personName = 'Gaby'
-dataPath = 'C:/Users/Estudiantes/OmesTutorials2020/6 RECONOCIMIENTO FACIAL/Data'  # Cambia a tu ruta
-personPath = dataPath + '/' + personName
-REPO_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'a9-v720', 'src')
+
+# Optimización de OpenCV
+cv2.setUseOptimized(True)
+
+
+# Persona y carpeta de captura
+personName = input("Ingrese el nombre de la persona: ").strip()
+
+dataPath = 'Data'
+
+personPath = os.path.join(
+    dataPath,
+    personName
+)
 
 if not os.path.exists(personPath):
-    print('Carpeta creada: ', personPath)
     os.makedirs(personPath)
+    print("Carpeta creada:", personPath)
+else:
+    print("La persona ya tiene una carpeta:", personPath)
 
-sys.path.insert(0, REPO_SRC)
 
-# --- Puente entre el script de la cámara y nuestro pipeline ---
-frame_queue = queue.Queue(maxsize=1)
-_original_imshow = cv2.imshow  # guardamos la función real para usarla nosotros
+# Rutas
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
 
-def _capture_imshow(winname, frame):
-    # Se ejecuta cada vez que a9_naxclow.py muestra un frame en vivo
-    if frame_queue.full():
+REPO_SRC = os.path.join(
+    BASE_DIR,
+    'a9-v720',
+    'src'
+)
+
+sys.path.insert(
+    0,
+    REPO_SRC
+)
+
+
+# Librerías de la cámara
+from netcl_tcp import netcl_tcp
+from v720_ap import v720_ap
+import cmd_udp
+
+
+# Configuración de la cámara
+CAMERA_IP = '192.168.169.1'
+
+CAMERA_PORT = 6123
+
+# Reconecta si no llegan imágenes durante 10 segundos.
+VIDEO_TIMEOUT = 10
+
+# Espera antes de reconectar.
+RECONNECT_DELAY = 2
+
+
+# Configuración de captura
+ANCHO_PROCESAMIENTO = 640
+
+# Cantidad de imágenes NUEVAS cada vez que ejecutes el programa.
+CAPTURAS_NUEVAS = 300
+
+
+# Cola de frames
+frame_queue = queue.Queue(
+    maxsize=1
+)
+
+stop_event = threading.Event()
+
+
+# Guardar el frame más reciente
+def guardar_frame(frame):
+
+    if frame is None:
+        return
+
+    try:
+        frame_queue.get_nowait()
+
+    except queue.Empty:
+        pass
+
+    try:
+        frame_queue.put_nowait(
+            frame
+        )
+
+    except queue.Full:
+        pass
+
+
+# Conexión con la cámara
+def camera_worker():
+
+    conexion = 0
+
+    while not stop_event.is_set():
+
+        conexion += 1
+
+        print()
+        print(
+            "=============================================="
+        )
+
+        print(
+            f"Conectando cámara A9 - intento {conexion}"
+        )
+
+        print(
+            "=============================================="
+        )
+
+        connection_stop = threading.Event()
+
         try:
-            frame_queue.get_nowait()
-        except queue.Empty:
-            pass
-    frame_queue.put(frame.copy())
 
-cv2.imshow = _capture_imshow  # interceptamos, no dejamos que abra su propia ventana
+            # Conectar socket
+            with netcl_tcp(
+                CAMERA_IP,
+                CAMERA_PORT
+            ) as sock:
 
-def run_camera_script():
-    sys.argv = ['a9_naxclow.py', '-l']
-    runpy.run_path(os.path.join(REPO_SRC, 'a9_naxclow.py'), run_name='__main__')
+                print(
+                    "Socket conectado."
+                )
 
-cam_thread = threading.Thread(target=run_camera_script, daemon=True)
+                # Inicializar cámara
+                cam = v720_ap(
+                    sock
+                )
+
+                cam.init_live_motion()
+
+                print(
+                    "Cámara A9 detectada."
+                )
+
+                # Ajustes de cámara
+                try:
+
+                    cam.ir_led(
+                        False
+                    )
+
+                except Exception:
+                    pass
+
+                try:
+
+                    cam.flip(
+                        False
+                    )
+
+                except Exception:
+                    pass
+
+
+                # Buffer JPEG
+                jpeg_buffer = bytearray()
+
+                estado = {
+                    'ultimo_frame': time.monotonic()
+                }
+
+
+                # Control de pérdida de video
+                def watchdog():
+
+                    while not connection_stop.wait(1):
+
+                        tiempo_sin_video = (
+                            time.monotonic()
+                            - estado['ultimo_frame']
+                        )
+
+                        if (
+                            tiempo_sin_video
+                            >= VIDEO_TIMEOUT
+                        ):
+
+                            print()
+
+                            print(
+                                f"⚠ Cámara sin imágenes durante "
+                                f"{tiempo_sin_video:.1f} segundos."
+                            )
+
+                            print(
+                                "Forzando reconexión..."
+                            )
+
+                            try:
+                                sock.close()
+
+                            except Exception:
+                                pass
+
+                            return
+
+
+                watchdog_thread = threading.Thread(
+                    target=watchdog,
+                    daemon=True
+                )
+
+                watchdog_thread.start()
+
+
+                # Recibir datos
+                def on_rcv(cmd, data):
+
+                    # Procesar solo paquetes JPEG.
+                    if (
+                        cmd
+                        != cmd_udp.P2P_UDP_CMD_JPEG
+                    ):
+                        return
+
+                    if not data:
+                        return
+
+
+                    # Añadir datos al buffer.
+                    jpeg_buffer.extend(
+                        data
+                    )
+
+
+                    # Buscar JPEG completos
+                    while True:
+
+                        inicio = jpeg_buffer.find(
+                            b'\xff\xd8'
+                        )
+
+                        if inicio == -1:
+
+                            if (
+                                len(jpeg_buffer)
+                                > 2_000_000
+                            ):
+                                jpeg_buffer.clear()
+
+                            return
+
+
+                        fin = jpeg_buffer.find(
+                            b'\xff\xd9',
+                            inicio + 2
+                        )
+
+
+                        if fin == -1:
+
+                            if inicio > 0:
+
+                                del jpeg_buffer[
+                                    :inicio
+                                ]
+
+                            if (
+                                len(jpeg_buffer)
+                                > 2_000_000
+                            ):
+                                jpeg_buffer.clear()
+
+                            return
+
+
+                        # Extraer JPEG
+                        jpeg_bytes = bytes(
+                            jpeg_buffer[
+                                inicio:fin + 2
+                            ]
+                        )
+
+                        del jpeg_buffer[
+                            :fin + 2
+                        ]
+
+
+                        # Decodificar JPEG
+                        jpeg_array = np.frombuffer(
+                            jpeg_bytes,
+                            dtype=np.uint8
+                        )
+
+                        frame = cv2.imdecode(
+                            jpeg_array,
+                            cv2.IMREAD_COLOR
+                        )
+
+                        if frame is None:
+                            continue
+
+
+                        # Actualizar control de video.
+                        estado['ultimo_frame'] = (
+                            time.monotonic()
+                        )
+
+
+                        # Guardar el frame más reciente.
+                        guardar_frame(
+                            frame
+                        )
+
+
+                # Iniciar transmisión
+                print(
+                    "Iniciando transmisión de vídeo..."
+                )
+
+                estado['ultimo_frame'] = (
+                    time.monotonic()
+                )
+
+                cam.cap_live(
+                    on_rcv
+                )
+
+                print()
+
+                print(
+                    "La transmisión terminó."
+                )
+
+
+        except Exception as error:
+
+            print()
+
+            print(
+                "⚠ Conexión con cámara interrumpida:"
+            )
+
+            print(
+                error
+            )
+
+
+        finally:
+
+            connection_stop.set()
+
+
+        # Reconectar cámara
+        if not stop_event.is_set():
+
+            print(
+                f"Reconectando en "
+                f"{RECONNECT_DELAY} segundos..."
+            )
+
+            time.sleep(
+                RECONNECT_DELAY
+            )
+
+
+# Iniciar cámara
+cam_thread = threading.Thread(
+    target=camera_worker,
+    daemon=True
+)
+
 cam_thread.start()
 
-# --- Tu lógica original, intacta ---
-faceClassif = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-count = 0
 
-while True:
-    try:
-        frame = frame_queue.get(timeout=5)
-    except queue.Empty:
-        print('No llegaron frames en 5s. Revisa que estés conectado a la red Nax_ de la cámara.')
-        continue
+# Detector de rostros
+faceClassif = cv2.CascadeClassifier(
+    cv2.data.haarcascades
+    + 'haarcascade_frontalface_default.xml'
+)
 
-    frame = imutils.resize(frame, width=640)
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    auxFrame = frame.copy()
 
-    faces = faceClassif.detectMultiScale(gray, 1.3, 5)
+# Ventana
+cv2.namedWindow(
+    'Captura de Rostros',
+    cv2.WINDOW_NORMAL
+)
 
-    for (x, y, w, h) in faces:
-        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        rostro = auxFrame[y:y+h, x:x+w]
-        rostro = cv2.resize(rostro, (150, 150), interpolation=cv2.INTER_CUBIC)
-        cv2.imwrite(personPath + '/rostro_{}.jpg'.format(count), rostro)
-        count = count + 1
 
-    _original_imshow('frame', frame)  # esta sí abre la ventana de verdad
+# ======================================================
+# DETECTAR IMÁGENES QUE YA EXISTEN
+# ======================================================
 
-    k = cv2.waitKey(1)
-    if k == 27 or count >= 300:
-        break
+extensiones_imagen = (
+    '.jpg',
+    '.jpeg',
+    '.png'
+)
 
-cv2.destroyAllWindows()
+imagenes_existentes = [
+    archivo
+    for archivo in os.listdir(personPath)
+    if archivo.lower().endswith(
+        extensiones_imagen
+    )
+]
+
+
+# Buscar el número más alto de rostro_#.jpg
+indices_existentes = []
+
+for archivo in imagenes_existentes:
+
+    nombre_sin_extension = (
+        os.path.splitext(archivo)[0]
+    )
+
+    if nombre_sin_extension.startswith(
+        'rostro_'
+    ):
+
+        try:
+
+            indice = int(
+                nombre_sin_extension.split(
+                    '_'
+                )[-1]
+            )
+
+            indices_existentes.append(
+                indice
+            )
+
+        except ValueError:
+            pass
+
+
+# Determinar desde qué número continuar
+if indices_existentes:
+
+    siguiente_indice = (
+        max(indices_existentes)
+        + 1
+    )
+
+else:
+
+    siguiente_indice = 0
+
+
+capturas_nuevas = 0
+
+cantidad_inicial = len(
+    imagenes_existentes
+)
+
+
+print()
+print(
+    f"Persona: {personName}"
+)
+
+print(
+    f"Imágenes existentes: "
+    f"{cantidad_inicial}"
+)
+
+print(
+    f"Próxima imagen: "
+    f"rostro_{siguiente_indice}.jpg"
+)
+
+print(
+    f"Se capturarán "
+    f"{CAPTURAS_NUEVAS} imágenes nuevas."
+)
+
+print()
+
+
+ultimo_aviso = 0
+
+
+# ======================================================
+# BUCLE PRINCIPAL
+# ======================================================
+
+try:
+
+    while True:
+
+        # Obtener frame
+        try:
+
+            frame = frame_queue.get(
+                timeout=0.05
+            )
+
+        except queue.Empty:
+
+            tecla = (
+                cv2.waitKey(1)
+                & 0xFF
+            )
+
+            if tecla == 27:
+                break
+
+
+            ahora = time.monotonic()
+
+            if (
+                ahora
+                - ultimo_aviso
+                >= 5
+            ):
+
+                print(
+                    "Esperando imágenes de la cámara..."
+                )
+
+                ultimo_aviso = ahora
+
+            continue
+
+
+        # Redimensionar
+        alto_original, ancho_original = (
+            frame.shape[:2]
+        )
+
+        nuevo_ancho = (
+            ANCHO_PROCESAMIENTO
+        )
+
+        nuevo_alto = int(
+            alto_original
+            * nuevo_ancho
+            / ancho_original
+        )
+
+        frame = cv2.resize(
+            frame,
+            (
+                nuevo_ancho,
+                nuevo_alto
+            ),
+            interpolation=cv2.INTER_AREA
+        )
+
+
+        # Copia para guardar rostros.
+        auxFrame = frame.copy()
+
+
+        # Escala de grises
+        gray = cv2.cvtColor(
+            frame,
+            cv2.COLOR_BGR2GRAY
+        )
+
+
+        # Detectar rostros
+        faces = faceClassif.detectMultiScale(
+            gray,
+            scaleFactor=1.3,
+            minNeighbors=5,
+            minSize=(60, 60)
+        )
+
+
+        # Guardar rostros
+        for (
+            x,
+            y,
+            w,
+            h
+        ) in faces:
+
+            # Marcar rostro.
+            cv2.rectangle(
+                frame,
+                (
+                    x,
+                    y
+                ),
+                (
+                    x + w,
+                    y + h
+                ),
+                (
+                    0,
+                    255,
+                    0
+                ),
+                2
+            )
+
+
+            # Extraer rostro.
+            rostro = auxFrame[
+                y:y + h,
+                x:x + w
+            ]
+
+
+            if rostro.size == 0:
+                continue
+
+
+            rostro = cv2.resize(
+                rostro,
+                (
+                    150,
+                    150
+                ),
+                interpolation=cv2.INTER_CUBIC
+            )
+
+
+            # Guardar imagen
+            ruta_rostro = os.path.join(
+                personPath,
+                f'rostro_{siguiente_indice}.jpg'
+            )
+
+
+            guardado = cv2.imwrite(
+                ruta_rostro,
+                rostro
+            )
+
+
+            if not guardado:
+
+                print(
+                    "No se pudo guardar:",
+                    ruta_rostro
+                )
+
+                continue
+
+
+            siguiente_indice += 1
+
+            capturas_nuevas += 1
+
+
+            total_actual = (
+                cantidad_inicial
+                + capturas_nuevas
+            )
+
+
+            print(
+                f"Rostro nuevo: "
+                f"{capturas_nuevas}/"
+                f"{CAPTURAS_NUEVAS} "
+                f"| Total: {total_actual}"
+            )
+
+
+            # Mostrar contador.
+            cv2.putText(
+                frame,
+                f'Nuevas: '
+                f'{capturas_nuevas}/'
+                f'{CAPTURAS_NUEVAS} '
+                f'| Total: {total_actual}',
+                (
+                    10,
+                    30
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (
+                    0,
+                    255,
+                    0
+                ),
+                2,
+                cv2.LINE_AA
+            )
+
+
+            if (
+                capturas_nuevas
+                >= CAPTURAS_NUEVAS
+            ):
+                break
+
+
+        # Mostrar contador
+        cv2.putText(
+            frame,
+            f'Nuevas: '
+            f'{capturas_nuevas}/'
+            f'{CAPTURAS_NUEVAS} '
+            f'| Total: '
+            f'{cantidad_inicial + capturas_nuevas}',
+            (
+                10,
+                30
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (
+                0,
+                255,
+                0
+            ),
+            2,
+            cv2.LINE_AA
+        )
+
+
+        # Mostrar video
+        cv2.imshow(
+            'Captura de Rostros',
+            frame
+        )
+
+
+        # Salir
+        tecla = (
+            cv2.waitKey(1)
+            & 0xFF
+        )
+
+
+        # ESC para salir.
+        if tecla == 27:
+            break
+
+
+        # Finalizar al completar las capturas.
+        if (
+            capturas_nuevas
+            >= CAPTURAS_NUEVAS
+        ):
+
+            print()
+
+            print(
+                f"Captura completada: "
+                f"{capturas_nuevas} "
+                f"rostros nuevos guardados. "
+                f"Total: "
+                f"{cantidad_inicial + capturas_nuevas}."
+            )
+
+            break
+
+
+except KeyboardInterrupt:
+
+    print(
+        "Programa detenido manualmente."
+    )
+
+
+finally:
+
+    stop_event.set()
+
+    cv2.destroyAllWindows()
+
+    print(
+        "Captura de rostros finalizada."
+    )
