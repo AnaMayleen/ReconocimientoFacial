@@ -1,0 +1,20 @@
+# Dependencias del proyecto de reconocimiento facial + ESP32
+# Instalación:  pip install -r requirements.txt
+
+# OpenCV con módulos extra (incluye cv2.face / LBPHFaceRecognizer).
+# IMPORTANTE: no instalar junto con "opencv-python"; si ya lo tienes,
+# desinstálalo primero:  pip uninstall opencv-python
+# (se limita a 4.x: la 5.x no incluye los detectores haarcascade)
+opencv-contrib-python>=4.5,<5
+
+# Procesamiento de arreglos e imágenes
+numpy>=1.21
+
+# Comunicación serial con el ESP32 (import serial)
+pyserial>=3.5
+
+# Librería de la cámara A9 (a9-v720/src): la usa prot_xml_udp.py
+xmltodict>=0.12
+
+# Interfaz web (app_web.py)
+flask>=2.0
